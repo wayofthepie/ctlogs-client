@@ -1,0 +1,18 @@
+[package]
+name = "ctlogs-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+again = "0.1.2"
+anyhow = "1.0.56"
+async-trait = "0.1.52"
+derive_builder = "0.10.2"
+http = "0.2.6"
+reqwest = { version = "0.11.9", features = [ "json", "stream", "native-tls-vendored" ] }
+serde = { version = "1.0.136", features = [ "derive" ] }
+serde_json = "1.0.79"
+tokio = { version = "1.17.0", features = [ "rt-multi-thread", "macros", "io-util", "fs", "signal" ] }
+
+[dev-dependencies]
+wiremock = "0.5.11"

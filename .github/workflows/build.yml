@@ -1,0 +1,68 @@
+on: push
+name: build
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rust:
+          - stable
+          - beta
+          - nightly
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust }}
+          override: true
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v1
+      - name: check formatting
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
+      - name: run cargo sort
+        run: |
+          cargo install cargo-sort-ck
+          cargo-sort-ck
+      - name: compile
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+      - name: Run cargo-tarpaulin
+        uses: actions-rs/tarpaulin@v0.1
+        with:
+          version: '0.18.3'
+          args: '--avoid-cfg-tarpaulin -- --test-threads 1'
+      - name: clippy lint
+        uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all-features -- -D warnings
+      - if: matrix.rust == 'stable'
+        name: Upload to codecov.io
+        uses: codecov/codecov-action@v1.0.2
+        with:
+          token: ${{secrets.CODECOV_TOKEN}}
+  cd:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    needs: ci
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+        components: rustfmt, clippy
+    - name: build release artifact
+      uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: --release
+    - name: publish
+      run: echo "Not sure where to put it yet ..."

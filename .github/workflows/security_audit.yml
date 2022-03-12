@@ -1,0 +1,24 @@
+name: security audit
+on:
+  schedule:
+    - cron: "0 8 * * *"
+  push:
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+  pull_request:
+    branches:
+      - main
+jobs:
+  security_audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: 1.56.0
+          override: true
+      - name: dependency audit
+        run: |
+          cargo audit

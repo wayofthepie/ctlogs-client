@@ -1,33 +1,15 @@
+pub use ctlogs_parser::parser::*;
+
+use chrono::serde::ts_milliseconds;
+use chrono::{DateTime, Utc};
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
-pub struct LogEntry {
-    /// The `leaf_input` field is a `String` of base64 encoded data. The data is a DER encoded
-    /// MerkleTreeHeader, which has the following structure.
-    ///
-    /// ```no_compile
-    /// [0] [1] [2..=9] [10..=11] [12..=14] [15..]
-    /// |   |     |        |         |      |
-    /// |   |     |        |         |      |- rest
-    /// |   |     |        |         |
-    /// |   |     |        |         |- length
-    /// |   |     |        |
-    /// |   |     |        | - log entry type
-    /// |   |     |
-    /// |   |     | - timestamp
-    /// |   |
-    /// |   | - signature type
-    /// |
-    /// | - version
-    /// ```
-    ///
-    pub leaf_input: String,
-    pub extra_data: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct STH {
+#[derive(Debug, PartialEq, Clone, Deserialize, Serialize)]
+pub struct SignedTreeHead {
     pub tree_size: usize,
+    #[serde(with = "ts_milliseconds")]
+    pub timestamp: DateTime<Utc>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -38,31 +20,29 @@ pub struct Operators {
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Operator {
     pub name: String,
-    pub email: Vec<String>,
-    pub logs: Vec<Log>,
+    pub logs: Vec<CtLog>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Log {
-    pub description: String,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CtLog {
     pub log_id: String,
-    pub key: String,
     pub url: String,
-    pub mmd: i64,
     pub state: State,
-    pub temporal_interval: Option<TemporalInterval>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct State {
-    pub usable: Option<Usable>,
-    pub readonly: Option<Readonly>,
-    pub retired: Option<Retired>,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "lowercase")]
+pub enum State {
+    Usable(Usable),
+    Readonly(Readonly),
+    Retired(Retired),
+    Qualified(serde_json::Value),
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Usable {
-    pub timestamp: String,
+    pub timestamp: DateTime<Utc>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -80,10 +60,4 @@ pub struct FinalTreeHead {
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Retired {
     pub timestamp: String,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TemporalInterval {
-    pub start_inclusive: String,
-    pub end_exclusive: String,
 }

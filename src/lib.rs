@@ -3,29 +3,25 @@ pub mod entry;
 use again::{self, RetryPolicy};
 use anyhow::anyhow;
 use async_trait::async_trait;
+use ctlogs_parser::parser::Logs;
 use derive_builder::Builder;
 use entry::*;
 use http::StatusCode;
 use reqwest::{Client, RequestBuilder};
-use serde::{Deserialize, Serialize};
 use std::time::Duration;
-
-#[derive(Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
-pub struct Logs {
-    pub entries: Vec<LogEntry>,
-}
 
 #[async_trait]
 pub trait CtClient {
     async fn list_log_operators(&self) -> anyhow::Result<Operators>;
-    async fn get_entries(&self, start: usize, end: usize) -> anyhow::Result<Logs>;
-    async fn get_tree_size(&self) -> anyhow::Result<usize>;
+
+    async fn get_entries(&self, base_url: &str, start: usize, end: usize) -> anyhow::Result<Logs>;
+
+    async fn get_sth(&self, base_url: &str) -> anyhow::Result<SignedTreeHead>;
 }
 
 #[derive(Clone, Builder)]
 #[builder(setter(into))]
 pub struct HttpCtClient<'a> {
-    base_url: &'a str,
     #[builder(default = "\"https://www.gstatic.com/ct/log_list/v2\"")]
     log_operators_base_url: &'a str,
     #[builder(default = "Client::new()")]
@@ -67,20 +63,29 @@ impl HttpCtClient<'_> {
 }
 
 #[async_trait]
-impl<'a> CtClient for HttpCtClient<'a> {
+impl CtClient for HttpCtClient<'_> {
     async fn list_log_operators(&self) -> anyhow::Result<Operators> {
-        self.retryable_request(
-            self.client
-                .get(&format!("{}/log_list.json", self.log_operators_base_url)),
-        )
-        .await
+        let mut base_url = self.log_operators_base_url;
+        if base_url.ends_with('/') {
+            base_url = &base_url[0..base_url.len() - 1];
+        }
+        self.retryable_request(self.client.get(&format!("{}/log_list.json", base_url)))
+            .await
     }
 
-    async fn get_entries(&self, start: usize, end: usize) -> anyhow::Result<Logs> {
+    async fn get_entries(
+        &self,
+        mut base_url: &str,
+        start: usize,
+        end: usize,
+    ) -> anyhow::Result<Logs> {
+        if base_url.ends_with('/') {
+            base_url = &base_url[0..base_url.len() - 1];
+        }
         let mut logs = self
             .retryable_request::<Logs>(
                 self.client
-                    .get(&format!("{}/get-entries", self.base_url))
+                    .get(&format!("{}/ct/v1/get-entries", base_url))
                     .query(&[("start", start), ("end", end)]),
             )
             .await?;
@@ -88,26 +93,33 @@ impl<'a> CtClient for HttpCtClient<'a> {
         while logs.entries.len() < end - start + 1 {
             let len = logs.entries.len();
             let new_start = start + len;
-            let next = self.get_entries(new_start, end).await?;
+            let next = self.get_entries(base_url, new_start, end).await?;
             logs.entries.extend(next.entries);
         }
         Ok(logs)
     }
 
-    async fn get_tree_size(&self) -> anyhow::Result<usize> {
+    async fn get_sth(&self, mut base_url: &str) -> anyhow::Result<SignedTreeHead> {
+        if base_url.ends_with('/') {
+            base_url = &base_url[0..base_url.len() - 1];
+        }
         Ok(self
-            .retryable_request::<STH>(self.client.get(&format!("{}/get-sth", self.base_url)))
-            .await?
-            .tree_size)
+            .retryable_request::<SignedTreeHead>(
+                self.client.get(&format!("{}/ct/v1/get-sth", base_url)),
+            )
+            .await?)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use super::{CtClient, HttpCtClientBuilder, LogEntry, Operators};
-    use super::{HttpCtClient, Logs, Operator, STH};
+    use super::{CtClient, HttpCtClientBuilder, Operators};
+    use super::{HttpCtClient, Logs, Operator, SignedTreeHead};
     use again::RetryPolicy;
+    use chrono::Utc;
+    use ctlogs_parser::parser::LogEntry;
     use std::time::Duration;
+    use wiremock::matchers::path_regex;
     use wiremock::{
         matchers::{method, path, query_param},
         Mock, MockServer, ResponseTemplate,
@@ -117,7 +129,6 @@ mod test {
 
     fn default_client(uri: &str) -> HttpCtClient {
         HttpCtClientBuilder::default()
-            .base_url(uri)
             .log_operators_base_url(uri)
             .timeout(Duration::from_millis(10))
             .retry_policy(RetryPolicy::fixed(Duration::from_millis(1)).with_max_retries(10))
@@ -129,13 +140,13 @@ mod test {
     async fn get_num_entries_should_fail_if_api_call_fails() {
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/get-sth"))
+            .and(path_regex(".*/get-sth"))
             .respond_with(ResponseTemplate::new(400))
             .mount(&mock_server)
             .await;
         let uri = &mock_server.uri();
         let client = default_client(uri);
-        let result = client.get_tree_size().await;
+        let result = client.get_sth(uri).await;
         assert!(result.is_err());
     }
 
@@ -144,24 +155,25 @@ mod test {
         let expected_size: usize = 12;
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/get-sth"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(STH {
+            .and(path_regex(".*/get-sth"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(SignedTreeHead {
                 tree_size: expected_size,
+                timestamp: Utc::now(),
             }))
             .mount(&mock_server)
             .await;
         let uri = &mock_server.uri();
         let client = default_client(uri);
-        let result = client.get_tree_size().await;
+        let result = client.get_sth(uri).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), expected_size);
+        assert_eq!(result.unwrap().tree_size, expected_size);
     }
 
     #[tokio::test]
     async fn get_entries_should_fail_if_log_retrieval_fails() {
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/get-entries"))
+            .and(path_regex(".*/v1/get-entries"))
             .and(query_param("start", "0"))
             .and(query_param("end", "1"))
             .respond_with(ResponseTemplate::new(400))
@@ -169,7 +181,7 @@ mod test {
             .await;
         let uri = &mock_server.uri();
         let client = default_client(uri);
-        let result = client.get_entries(0, 1).await;
+        let result = client.get_entries(uri, 0, 1).await;
         assert!(result.is_err());
     }
 
@@ -178,13 +190,13 @@ mod test {
         let body: Vec<u32> = vec![0, 0];
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/get-entries"))
+            .and(path_regex(".*/get-entries"))
             .respond_with(ResponseTemplate::new(200).set_body_json(&body))
             .mount(&mock_server)
             .await;
         let uri = &mock_server.uri();
         let client = default_client(uri);
-        let result = client.get_entries(0, 1).await;
+        let result = client.get_entries(uri, 0, 1).await;
         assert!(result.is_err());
     }
 
@@ -204,7 +216,7 @@ mod test {
         };
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/get-entries"))
+            .and(path_regex(".*/get-entries"))
             .and(query_param("start", "0"))
             .and(query_param("end", "1"))
             .respond_with(ResponseTemplate::new(200).set_body_json(&body))
@@ -212,7 +224,7 @@ mod test {
             .await;
         let uri = &mock_server.uri();
         let client = default_client(uri);
-        let result = client.get_entries(0, 1).await;
+        let result = client.get_entries(uri, 0, 1).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), body);
     }
@@ -233,7 +245,7 @@ mod test {
         };
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/get-entries"))
+            .and(path_regex(".*/get-entries"))
             .and(query_param("start", "0"))
             .and(query_param("end", "1"))
             .respond_with(ResponseTemplate::new(401))
@@ -241,7 +253,7 @@ mod test {
             .mount(&mock_server)
             .await;
         Mock::given(method("GET"))
-            .and(path("/get-entries"))
+            .and(path_regex(".*/get-entries"))
             .and(query_param("start", "0"))
             .and(query_param("end", "1"))
             .respond_with(ResponseTemplate::new(200).set_body_json(&body))
@@ -250,7 +262,7 @@ mod test {
 
         let uri = &mock_server.uri();
         let client = default_client(uri);
-        let result = client.get_entries(0, 1).await;
+        let result = client.get_entries(uri, 0, 1).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), body);
     }
@@ -259,50 +271,55 @@ mod test {
     async fn get_tree_size_should_retry_on_failure() {
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/get-sth"))
+            .and(path_regex(".*/get-sth"))
             .respond_with(ResponseTemplate::new(400))
             .up_to_n_times(1)
             .mount(&mock_server)
             .await;
         Mock::given(method("GET"))
-            .and(path("/get-sth"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(STH { tree_size: 0 }))
+            .and(path_regex(".*/get-sth"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(SignedTreeHead {
+                tree_size: 0,
+                timestamp: Utc::now(),
+            }))
             .mount(&mock_server)
             .await;
         let uri = &mock_server.uri();
         let client = default_client(uri);
-        let result = client.get_tree_size().await;
+        let result = client.get_sth(uri).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 0);
+        assert_eq!(result.unwrap().tree_size, 0);
     }
 
     #[tokio::test]
     async fn get_tree_size_should_retry_on_timeout() {
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/get-sth"))
+            .and(path_regex(".*/get-sth"))
             .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(50)))
             .up_to_n_times(1)
             .mount(&mock_server)
             .await;
         Mock::given(method("GET"))
-            .and(path("/get-sth"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(STH { tree_size: 0 }))
+            .and(path_regex(".*/get-sth"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(SignedTreeHead {
+                tree_size: 0,
+                timestamp: Utc::now(),
+            }))
             .mount(&mock_server)
             .await;
         let uri = &mock_server.uri();
 
         let policy = RetryPolicy::fixed(Duration::from_millis(10)).with_max_retries(10);
         let client = HttpCtClientBuilder::default()
-            .base_url(uri.as_ref())
             .log_operators_base_url(uri.as_ref())
             .retry_policy(policy)
             .timeout(Duration::from_millis(10))
             .build()
             .unwrap();
-        let result = client.get_tree_size().await;
+        let result = client.get_sth(uri).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 0);
+        assert_eq!(result.unwrap().tree_size, 0);
     }
 
     #[tokio::test]
@@ -321,7 +338,7 @@ mod test {
         };
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/get-entries"))
+            .and(path_regex(".*/get-entries"))
             .and(query_param("start", "0"))
             .and(query_param("end", "1"))
             .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(50)))
@@ -329,7 +346,7 @@ mod test {
             .mount(&mock_server)
             .await;
         Mock::given(method("GET"))
-            .and(path("/get-entries"))
+            .and(path_regex(".*/get-entries"))
             .and(query_param("start", "0"))
             .and(query_param("end", "1"))
             .respond_with(ResponseTemplate::new(200).set_body_json(&body))
@@ -338,13 +355,12 @@ mod test {
         let uri = &mock_server.uri();
         let policy = RetryPolicy::fixed(Duration::from_millis(10)).with_max_retries(10);
         let client = HttpCtClientBuilder::default()
-            .base_url(uri.as_ref())
             .log_operators_base_url(uri.as_ref())
             .retry_policy(policy)
             .timeout(Duration::from_millis(10))
             .build()
             .unwrap();
-        let result = client.get_entries(0, 1).await;
+        let result = client.get_entries(uri, 0, 1).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), body);
     }
@@ -365,7 +381,7 @@ mod test {
         };
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/get-entries"))
+            .and(path_regex(".*/get-entries"))
             .and(query_param("start", "0"))
             .and(query_param("end", "1"))
             .respond_with(ResponseTemplate::new(429))
@@ -373,7 +389,7 @@ mod test {
             .mount(&mock_server)
             .await;
         Mock::given(method("GET"))
-            .and(path("/get-entries"))
+            .and(path_regex(".*/get-entries"))
             .and(query_param("start", "0"))
             .and(query_param("end", "1"))
             .respond_with(ResponseTemplate::new(200).set_body_json(&body))
@@ -382,13 +398,11 @@ mod test {
         let uri = &mock_server.uri();
         let policy = RetryPolicy::fixed(Duration::from_millis(10)).with_max_retries(10);
         let client = HttpCtClientBuilder::default()
-            .base_url(uri.as_ref())
-            .log_operators_base_url(uri.as_ref())
             .retry_policy(policy)
             .timeout(Duration::from_millis(10))
             .build()
             .unwrap();
-        let result = client.get_entries(0, 1).await;
+        let result = client.get_entries(uri, 0, 1).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), body);
     }

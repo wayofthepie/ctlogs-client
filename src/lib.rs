@@ -412,7 +412,6 @@ mod test {
         let body = Operators {
             operators: vec![Operator {
                 name: "Google".to_owned(),
-                email: vec!["google-ct-logs@googlegroups.com".to_owned()],
                 logs: vec![],
             }],
         };

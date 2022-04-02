@@ -2,7 +2,6 @@ pub use ctlogs_parser::parser::*;
 
 use chrono::serde::ts_milliseconds;
 use chrono::{DateTime, Utc};
-use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Clone, Deserialize, Serialize)]

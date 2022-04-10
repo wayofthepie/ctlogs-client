@@ -93,7 +93,13 @@ impl CtClient for HttpCtClient<'_> {
         while logs.entries.len() < end - start {
             let len = logs.entries.len();
             let new_start = start + len;
-            let next = self.get_entries(base_url, new_start, end).await?;
+            let next = self
+                .retryable_request::<Logs>(
+                    self.client
+                        .get(&format!("{}/ct/v1/get-entries", base_url))
+                        .query(&[("start", new_start), ("end", end)]),
+                )
+                .await?;
             logs.entries.extend(next.entries);
         }
         Ok(logs)

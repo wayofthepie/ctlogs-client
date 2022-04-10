@@ -90,7 +90,7 @@ impl CtClient for HttpCtClient<'_> {
             )
             .await?;
 
-        while logs.entries.len() < end - start + 1 {
+        while logs.entries.len() < end - start {
             let len = logs.entries.len();
             let new_start = start + len;
             let next = self.get_entries(base_url, new_start, end).await?;

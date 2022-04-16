@@ -44,9 +44,9 @@ pub struct Usable {
     pub timestamp: DateTime<Utc>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Readonly {
-    pub timestamp: String,
+    pub timestamp: DateTime<Utc>,
     pub final_tree_head: FinalTreeHead,
 }
 
@@ -56,7 +56,7 @@ pub struct FinalTreeHead {
     pub tree_size: i64,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Retired {
-    pub timestamp: String,
+    pub timestamp: DateTime<Utc>,
 }

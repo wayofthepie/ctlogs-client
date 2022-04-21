@@ -207,7 +207,7 @@ dependencies = [
 [[package]]
 name = "ctlogs-parser"
 version = "0.1.0"
-source = "git+https://github.com/wayofthepie/ctlogs-parser.git#0584967ea687b7622420699240dbda3dfdd7dd8e"
+source = "git+https://github.com/wayofthepie/ctlogs-parser.git#b5adbdc11228bbc76797aeec004fcf7b898315c3"
 dependencies = [
  "anyhow",
  "base64",

@@ -219,6 +219,7 @@ mod test {
                     extra_data: "".to_owned(),
                 },
             ],
+            ..Default::default()
         };
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -248,6 +249,7 @@ mod test {
                     extra_data: "".to_owned(),
                 },
             ],
+            ..Default::default()
         };
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -341,6 +343,7 @@ mod test {
                     extra_data: "".to_owned(),
                 },
             ],
+            ..Default::default()
         };
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -384,6 +387,7 @@ mod test {
                     extra_data: "".to_owned(),
                 },
             ],
+            ..Default::default()
         };
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))

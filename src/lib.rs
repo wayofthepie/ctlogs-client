@@ -101,13 +101,7 @@ impl CtClient for HttpCtClient<'_> {
                     .query(&[("start", start), ("end", end)]),
             )
             .await?;
-        let mut entries = logs
-            .entries
-            .into_iter()
-            .enumerate()
-            .map(|(index, entry)| (start + index, entry))
-            .collect::<Vec<(usize, LogEntry)>>();
-
+        let mut entries = add_index(logs.entries, start);
         while entries.len() < end - start {
             let len = entries.len();
             let new_start = start + len;
@@ -118,13 +112,7 @@ impl CtClient for HttpCtClient<'_> {
                         .query(&[("start", new_start), ("end", end)]),
                 )
                 .await?;
-            entries.extend(
-                next.entries
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, entry)| (new_start + index, entry))
-                    .collect::<Vec<(usize, LogEntry)>>(),
-            );
+            entries.extend(add_index(next.entries, new_start));
         }
         Ok(IndexedLogs { entries })
     }
@@ -139,6 +127,14 @@ impl CtClient for HttpCtClient<'_> {
             )
             .await?)
     }
+}
+
+fn add_index<T>(items: Vec<T>, start: usize) -> Vec<(usize, T)> {
+    items
+        .into_iter()
+        .enumerate()
+        .map(|(index, entry)| (start + index, entry))
+        .collect::<Vec<(usize, T)>>()
 }
 
 #[cfg(test)]

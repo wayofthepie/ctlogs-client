@@ -8,13 +8,25 @@ use derive_builder::Builder;
 use entry::*;
 use http::StatusCode;
 use reqwest::{Client, RequestBuilder};
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+#[derive(PartialEq, Debug, Serialize, Deserialize)]
+pub struct IndexedLogs {
+    /// Defines the start position, in a given certificate transparency
+    /// log, of the first entry in `logs`.
+    pub entries: Vec<(usize, LogEntry)>,
+}
 #[async_trait]
 pub trait CtClient {
     async fn list_log_operators(&self) -> anyhow::Result<Operators>;
 
-    async fn get_entries(&self, base_url: &str, start: usize, end: usize) -> anyhow::Result<Logs>;
+    async fn get_entries(
+        &self,
+        base_url: &str,
+        start: usize,
+        end: usize,
+    ) -> anyhow::Result<IndexedLogs>;
 
     async fn get_sth(&self, base_url: &str) -> anyhow::Result<SignedTreeHead>;
 }
@@ -78,20 +90,26 @@ impl CtClient for HttpCtClient<'_> {
         mut base_url: &str,
         start: usize,
         end: usize,
-    ) -> anyhow::Result<Logs> {
+    ) -> anyhow::Result<IndexedLogs> {
         if base_url.ends_with('/') {
             base_url = &base_url[0..base_url.len() - 1];
         }
-        let mut logs = self
+        let logs = self
             .retryable_request::<Logs>(
                 self.client
                     .get(&format!("{}/ct/v1/get-entries", base_url))
                     .query(&[("start", start), ("end", end)]),
             )
             .await?;
+        let mut entries = logs
+            .entries
+            .into_iter()
+            .enumerate()
+            .map(|(index, entry)| (start + index, entry))
+            .collect::<Vec<(usize, LogEntry)>>();
 
-        while logs.entries.len() < end - start {
-            let len = logs.entries.len();
+        while entries.len() < end - start {
+            let len = entries.len();
             let new_start = start + len;
             let next = self
                 .retryable_request::<Logs>(
@@ -100,9 +118,15 @@ impl CtClient for HttpCtClient<'_> {
                         .query(&[("start", new_start), ("end", end)]),
                 )
                 .await?;
-            logs.entries.extend(next.entries);
+            entries.extend(
+                next.entries
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, entry)| (new_start + index, entry))
+                    .collect::<Vec<(usize, LogEntry)>>(),
+            );
         }
-        Ok(logs)
+        Ok(IndexedLogs { entries })
     }
 
     async fn get_sth(&self, mut base_url: &str) -> anyhow::Result<SignedTreeHead> {
@@ -219,7 +243,6 @@ mod test {
                     extra_data: "".to_owned(),
                 },
             ],
-            ..Default::default()
         };
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -233,7 +256,57 @@ mod test {
         let client = default_client(uri);
         let result = client.get_entries(uri, 0, 1).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), body);
+        let logs = result.unwrap();
+        assert_eq!(
+            &logs.entries.get(0).unwrap().1,
+            body.entries.get(0).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn get_entries_should_return_logs_with_correct_indices() {
+        let start = 10;
+        let end = 50;
+        let first_batch = Logs {
+            entries: vec![
+                LogEntry {
+                    leaf_input: LEAF_INPUT.to_owned(),
+                    extra_data: "".to_owned(),
+                };
+                31
+            ],
+        };
+        let second_batch = Logs {
+            entries: vec![
+                LogEntry {
+                    leaf_input: LEAF_INPUT.to_owned(),
+                    extra_data: "".to_owned(),
+                };
+                end - start - 31 + 1
+            ],
+        };
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(".*/get-entries"))
+            .and(query_param("start", start.to_string()))
+            .and(query_param("end", end.to_string()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&first_batch))
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(".*/get-entries"))
+            .and(query_param("start", (start + 31).to_string()))
+            .and(query_param("end", end.to_string()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&second_batch))
+            .mount(&mock_server)
+            .await;
+        let uri = &mock_server.uri();
+        let client = default_client(uri);
+        let result = client.get_entries(uri, start, end).await;
+        assert!(result.is_ok(), "expected result, got: {:#?}", result);
+        let logs = result.unwrap();
+        assert_eq!(logs.entries.get(0).unwrap().0, start);
+        assert_eq!(logs.entries.last().unwrap().0, end);
     }
 
     #[tokio::test]
@@ -249,7 +322,6 @@ mod test {
                     extra_data: "".to_owned(),
                 },
             ],
-            ..Default::default()
         };
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -272,7 +344,11 @@ mod test {
         let client = default_client(uri);
         let result = client.get_entries(uri, 0, 1).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), body);
+        let logs = result.unwrap();
+        assert_eq!(
+            &logs.entries.get(0).unwrap().1,
+            body.entries.get(0).unwrap()
+        );
     }
 
     #[tokio::test]
@@ -343,7 +419,6 @@ mod test {
                     extra_data: "".to_owned(),
                 },
             ],
-            ..Default::default()
         };
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -371,7 +446,11 @@ mod test {
             .unwrap();
         let result = client.get_entries(uri, 0, 1).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), body);
+        let logs = result.unwrap();
+        assert_eq!(
+            &logs.entries.get(0).unwrap().1,
+            body.entries.get(0).unwrap()
+        );
     }
 
     #[tokio::test]
@@ -387,7 +466,6 @@ mod test {
                     extra_data: "".to_owned(),
                 },
             ],
-            ..Default::default()
         };
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -414,7 +492,11 @@ mod test {
             .unwrap();
         let result = client.get_entries(uri, 0, 1).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), body);
+        let logs = result.unwrap();
+        assert_eq!(
+            &logs.entries.get(0).unwrap().1,
+            body.entries.get(0).unwrap()
+        );
     }
 
     #[tokio::test]

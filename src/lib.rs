@@ -102,7 +102,7 @@ impl CtClient for HttpCtClient<'_> {
             )
             .await?;
         let mut entries = add_index(logs.entries, start);
-        while entries.len() < end - start {
+        while entries.len() <= end - start {
             let len = entries.len();
             let new_start = start + len;
             let next = self

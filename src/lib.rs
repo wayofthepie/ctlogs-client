@@ -9,7 +9,8 @@ use entry::*;
 use http::StatusCode;
 use reqwest::{Client, RequestBuilder};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::{fmt::Debug, time::Duration};
+use tracing::instrument;
 
 #[derive(PartialEq, Debug, Serialize, Deserialize)]
 pub struct IndexedLogs {
@@ -45,6 +46,7 @@ pub struct HttpCtClient<'a> {
 }
 
 impl HttpCtClient<'_> {
+    #[instrument(skip(self, builder))]
     async fn retryable_request<T>(&self, builder: RequestBuilder) -> anyhow::Result<T>
     where
         T: serde::de::DeserializeOwned + Send + Sync,
@@ -76,6 +78,7 @@ impl HttpCtClient<'_> {
 
 #[async_trait]
 impl CtClient for HttpCtClient<'_> {
+    #[instrument(skip(self))]
     async fn list_log_operators(&self) -> anyhow::Result<Operators> {
         let mut base_url = self.log_operators_base_url;
         if base_url.ends_with('/') {
@@ -85,6 +88,7 @@ impl CtClient for HttpCtClient<'_> {
             .await
     }
 
+    #[instrument(skip(self))]
     async fn get_entries(
         &self,
         mut base_url: &str,
@@ -117,6 +121,7 @@ impl CtClient for HttpCtClient<'_> {
         Ok(IndexedLogs { entries })
     }
 
+    #[instrument(skip(self))]
     async fn get_sth(&self, mut base_url: &str) -> anyhow::Result<SignedTreeHead> {
         if base_url.ends_with('/') {
             base_url = &base_url[0..base_url.len() - 1];
@@ -129,6 +134,7 @@ impl CtClient for HttpCtClient<'_> {
     }
 }
 
+#[instrument(skip(items))]
 fn add_index<T>(items: Vec<T>, start: usize) -> Vec<(usize, T)> {
     items
         .into_iter()
